@@ -19,8 +19,8 @@ class DQNAgent:
         # for envi in envs:
         #     print(envi)
 
-    def __init__(self, environment, mem_init_size=64, max_episodes=100, learn_step=True, learn_batch=None,
-                 learn_epochs=5, done_factor=-1):
+    def __init__(self, environment, expl_decay=0.995, mem_init_size=64, max_episodes=100, learn_step=True,
+                 learn_batch=None, learn_epochs=5, done_factor=-1, reward_policy='cumulative'):
         # Constants
         self.batch_size = 64
         self.memory_limit = 1_000_000
@@ -33,13 +33,14 @@ class DQNAgent:
             self.learn_batch = learn_batch
         self.learn_epochs = learn_epochs
         self.done_factor = done_factor
+        self.reward_policy = reward_policy
 
         # Learning parameters
         self.alpha = 0.001
         self.expl_max = 1.0
         self.expl_min = 0.01
         self.expl_rate = self.expl_max
-        self.expl_decay = 0.995 #0.0001
+        self.expl_decay = expl_decay
         self.greedy_decay = 0.0001
         self.gamma = 0.95
 
@@ -55,15 +56,16 @@ class DQNAgent:
 
         # High-score Model's copies
         self.hall_of_fame = deque(maxlen=10)
-        self.hall_max_reward = 0
+        self.hall_max_reward = -99_999_999_999.0
 
         # Model
         self.input_shape = self.observation_space.shape
         self.output_dim =  self.action_n
         print(f"self.input_shape={self.input_shape}, self.output_dim={self.output_dim}")
         m_input = tf.keras.Input(shape=self.input_shape)
-        m = tf.keras.layers.Dense(128, activation='relu')(m_input)
-        m = tf.keras.layers.Dense(128, activation='relu')(m)
+        m = tf.keras.layers.Dense(64, activation='relu')(m_input)
+        m = tf.keras.layers.Dense(48, activation='relu')(m)
+        m = tf.keras.layers.Dense(24, activation='relu')(m)
         m_output = tf.keras.layers.Dense(self.output_dim , activation='linear')(m)
         model = tf.keras.Model(m_input, m_output)
         #model.compile(optimizer='rmsprop', loss='mse')
@@ -112,6 +114,7 @@ class DQNAgent:
             observation = self.env.reset()
             done = False
             steps = 0
+            total_reward = 0
             while not done:
                 #print(f"Random action = {ra}")
                 action = random_actions[row]
@@ -119,12 +122,15 @@ class DQNAgent:
                 steps += 1
 
                 if done: reward = reward * self.done_factor
+                total_reward += reward
 
-                # if done and steps < 500: reward = -reward
-                # reward = steps / 500 * reward
-                # if done and steps < 500: reward = -1
+                # Calculating final reward
+                if self.reward_policy == 'cumulative':
+                    final_reward = total_reward
+                else:
+                    final_reward = reward
 
-                self.memory.append((observation, action, reward, observation_next, done))
+                self.memory.append((observation, action, final_reward, observation_next, done))
                 observation = observation_next
                 row += 1
                 if row == self.memory_init_size or done:
@@ -162,6 +168,7 @@ class DQNAgent:
                 # else:
                 #     action = np.argmax(g_action)
 
+
                 # Make a step with environment
                 observation_next, reward, done, info = self.env.step(action)
                 steps += 1
@@ -170,25 +177,28 @@ class DQNAgent:
                 #print('done', done, 'reward', reward)
 
                 if done: reward = reward * self.done_factor
-
-                # if done and steps < 500: reward = -reward
-                # reward = steps/500 * reward
-                # if done and steps < 500: reward = -1
-
-                # Add experience to memory (избыточный shape)
-                self.memory.append((observation, action, reward, observation_next, done))
-                observation = observation_next
                 total_reward += reward
+
+                # Calculating reward
+                if self.reward_policy=='cumulative':
+                    final_reward = total_reward
+                else:
+                    final_reward = reward
+
+                # Add experience to memory
+                self.memory.append((observation, action, final_reward, observation_next, done))
+                observation = observation_next
+
 
                 # Experience replay
                 # self.experience_replay()
 
                 if done:
-                    print(f"{self.expl_rate} Episode {episode} finished. Reward {total_reward}. Score {steps}")
+                    print(f"{self.expl_rate} Episode {episode} finished. Reward {final_reward}. Steps {steps}")
                     # Copy the most successful model to hall of fame
-                    if self.hall_max_reward <= total_reward:
+                    if self.hall_max_reward <= final_reward:
                         self.hall_of_fame.append((tf.keras.models.clone_model(self.model), self.model.get_weights()))
-                        self.hall_max_reward = total_reward
+                        self.hall_max_reward = final_reward
                     break
 
                 # Experience replay each step self.step_learn == True
@@ -280,11 +290,11 @@ if __name__ == "__main__":
     # env_name = "BipedalWalkerHardcore-v3"
     env = gym.make(env_name)
 
-    cartpole_dqn = DQNAgent(environment=env, mem_init_size=64000, max_episodes=500, learn_step=True, learn_batch=None,
-                            learn_epochs=5, done_factor=1)
+    cartpole_dqn = DQNAgent(environment=env, expl_decay=0.91, mem_init_size=640, max_episodes=400, learn_step=False,
+                            learn_batch=None, learn_epochs=20, done_factor=1, reward_policy='cumulative')
     cartpole_dqn.get_info()
     #cartpole_dqn.fill_memory()
-    cartpole_dqn.fit(e_play=0)
+    cartpole_dqn.fit(e_play=3)
 
     env_play = gym.make(env_name)
     model, weights = cartpole_dqn.hall_of_fame[-1]
