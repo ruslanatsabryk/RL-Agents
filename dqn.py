@@ -19,12 +19,13 @@ class DQNAgent:
         # for envi in envs:
         #     print(envi)
 
-    def __init__(self, environment, mem_init_size=64, max_episodes=100):
+    def __init__(self, environment, mem_init_size=64, max_episodes=100, step_learn=True):
         # Constants
         self.batch_size = 64
         self.memory_limit = 1_000_000
         self.memory_init_size = mem_init_size
         self.max_episodes = max_episodes
+        self.step_learn = step_learn
 
         # Learning parameters
         self.alpha = 0.001
@@ -182,7 +183,12 @@ class DQNAgent:
                         self.hall_max_reward = total_reward
                     break
 
-                # Experience replay
+                # Experience replay each step self.step_learn == True
+                if self.step_learn:
+                    self.experience_replay()
+
+            # Experience replay each episode, self.step_learn == False
+            if not self.step_learn:
                 self.experience_replay()
 
         self.env.close()
@@ -266,7 +272,7 @@ if __name__ == "__main__":
     # env_name = "BipedalWalkerHardcore-v3"
     env = gym.make(env_name)
 
-    cartpole_dqn = DQNAgent(environment=env, mem_init_size=64000, max_episodes=120)
+    cartpole_dqn = DQNAgent(environment=env, mem_init_size=6400, max_episodes=120, step_learn=False)
     cartpole_dqn.get_info()
     #cartpole_dqn.fill_memory()
     cartpole_dqn.fit(e_play=0)
