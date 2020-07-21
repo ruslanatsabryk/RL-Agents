@@ -19,13 +19,20 @@ class DQNAgent:
         # for envi in envs:
         #     print(envi)
 
-    def __init__(self, environment, mem_init_size=64, max_episodes=100, step_learn=True):
+    def __init__(self, environment, mem_init_size=64, max_episodes=100, learn_step=True, learn_batch=None,
+                 learn_epochs=5, done_factor=-1):
         # Constants
         self.batch_size = 64
         self.memory_limit = 1_000_000
         self.memory_init_size = mem_init_size
         self.max_episodes = max_episodes
-        self.step_learn = step_learn
+        self.learn_step = learn_step
+        if learn_batch is None:
+            self.learn_batch = self.batch_size = 64
+        else:
+            self.learn_batch = learn_batch
+        self.learn_epochs = learn_epochs
+        self.done_factor = done_factor
 
         # Learning parameters
         self.alpha = 0.001
@@ -55,8 +62,8 @@ class DQNAgent:
         self.output_dim =  self.action_n
         print(f"self.input_shape={self.input_shape}, self.output_dim={self.output_dim}")
         m_input = tf.keras.Input(shape=self.input_shape)
-        m = tf.keras.layers.Dense(48, activation='relu')(m_input)
-        m = tf.keras.layers.Dense(48, activation='relu')(m)
+        m = tf.keras.layers.Dense(128, activation='relu')(m_input)
+        m = tf.keras.layers.Dense(128, activation='relu')(m)
         m_output = tf.keras.layers.Dense(self.output_dim , activation='linear')(m)
         model = tf.keras.Model(m_input, m_output)
         #model.compile(optimizer='rmsprop', loss='mse')
@@ -111,7 +118,7 @@ class DQNAgent:
                 observation_next, reward, done, info = self.env.step(action)
                 steps += 1
 
-                if done: reward = -reward
+                if done: reward = reward * self.done_factor
 
                 # if done and steps < 500: reward = -reward
                 # reward = steps / 500 * reward
@@ -130,7 +137,8 @@ class DQNAgent:
 
     def fit(self, e_play=0):
         # Fill memory
-        self.fill_memory()
+        if self.memory_init_size > 0:
+            self.fill_memory()
         for episode in range(self.max_episodes):
             observation = self.env.reset()
             observation = np.reshape(observation, (1, -1))
@@ -161,7 +169,7 @@ class DQNAgent:
 
                 #print('done', done, 'reward', reward)
 
-                if done: reward = -reward
+                if done: reward = reward * self.done_factor
 
                 # if done and steps < 500: reward = -reward
                 # reward = steps/500 * reward
@@ -184,11 +192,11 @@ class DQNAgent:
                     break
 
                 # Experience replay each step self.step_learn == True
-                if self.step_learn:
+                if self.learn_step:
                     self.experience_replay()
 
             # Experience replay each episode, self.step_learn == False
-            if not self.step_learn:
+            if not self.learn_step:
                 self.experience_replay()
 
         self.env.close()
@@ -230,7 +238,7 @@ class DQNAgent:
             #print(q_values[i], actions[i, 0], "q_values_next[i, 0]", q_values_next[i, 0])
         # Train self.model (gradient descent)
         #self.model.train_on_batch(x=observations, y=q_values)
-        self.model.fit(x=observations, y=q_values, batch_size=self.batch_size, epochs=5, verbose=0) #=self.batch_size
+        self.model.fit(x=observations, y=q_values, batch_size=self.learn_batch, epochs=self.learn_epochs, verbose=0) #=self.batch_size
 
         # Calculate Exploration Rate
         if len(self.memory) > self.memory_init_size:
@@ -272,7 +280,8 @@ if __name__ == "__main__":
     # env_name = "BipedalWalkerHardcore-v3"
     env = gym.make(env_name)
 
-    cartpole_dqn = DQNAgent(environment=env, mem_init_size=6400, max_episodes=120, step_learn=False)
+    cartpole_dqn = DQNAgent(environment=env, mem_init_size=64000, max_episodes=500, learn_step=True, learn_batch=None,
+                            learn_epochs=5, done_factor=1)
     cartpole_dqn.get_info()
     #cartpole_dqn.fill_memory()
     cartpole_dqn.fit(e_play=0)
