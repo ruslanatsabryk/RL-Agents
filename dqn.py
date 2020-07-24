@@ -34,7 +34,7 @@ class DQNAgent:
 
     def __init__(self, environment, expl_decay=0.995, batch_size=64, mem_limit=1_000_000, mem_init_size=64,
                  max_episodes=100, gamma=0.95, learning_rate=0.001, learn_step=True, learn_batch=None, learn_epochs=5,
-                 done_factor=-1, reward_policy='asis'):
+                 done_factor=-1, done_penalty=-20, reward_policy='asis'):
         # Constants
         self.batch_size = batch_size
         self.memory_limit = mem_limit
@@ -47,6 +47,7 @@ class DQNAgent:
             self.learn_batch = learn_batch
         self.learn_epochs = learn_epochs
         self.done_factor = done_factor
+        self.done_penalty = done_penalty
         self.reward_policy = reward_policy
 
         # Learning parameters
@@ -76,8 +77,8 @@ class DQNAgent:
         self.output_dim =  self.action_n
         print(f"self.input_shape={self.input_shape}, self.output_dim={self.output_dim}")
         m_input = tf.keras.Input(shape=self.input_shape)
-        m = tf.keras.layers.Dense(256, activation='relu')(m_input)
-        m = tf.keras.layers.Dense(256, activation='relu')(m)
+        m = tf.keras.layers.Dense(24, activation='relu')(m_input)
+        m = tf.keras.layers.Dense(24, activation='relu')(m)
         #m = tf.keras.layers.Dense(24, activation='relu')(m)
         m_output = tf.keras.layers.Dense(self.output_dim , activation='linear')(m)
         model = tf.keras.Model(m_input, m_output)
@@ -118,7 +119,7 @@ class DQNAgent:
                 steps += 1
 
                 #reward = 0 if reward == -1 else reward
-                if done: reward = reward * self.done_factor - 20
+                if done: reward = reward * self.done_factor + self.done_penalty
                 total_reward += reward
 
                 # Calculating final reward
@@ -155,13 +156,6 @@ class DQNAgent:
                 else:
                     action = np.argmax(self.model.predict(observation)[0])
 
-                # g_action = self.model.predict(observation)[0]
-                # if np.random.rand() < self.expl_rate:
-                #     action = np.argmax(1 - g_action)
-                # else:
-                #     action = np.argmax(g_action)
-
-
                 # Make a step with environment
                 observation_next, reward, done, info = self.env.step(action)
                 steps += 1
@@ -170,7 +164,7 @@ class DQNAgent:
                 # Done and total rewards
                 #reward = -reward
                 #print('reward', reward)
-                if done: reward = reward * self.done_factor - 20
+                if done: reward = reward * self.done_factor + self.done_penalty
                 total_reward += reward
 
                 # Calculating final reward
@@ -191,7 +185,7 @@ class DQNAgent:
 
                     #self.memory.append((observation, action, final_reward, observation_next, done))
 
-                    print(f"{self.expl_rate} Episode {episode} finished. Reward {total_reward}. Steps {steps}, {len(self.memory)}")
+                    print(f"{self.expl_rate} Episode {episode} finished. Reward {final_reward}. Steps {steps}, {len(self.memory)}")
                     # Copy the most successful model to hall of fame
                     if self.hall_max_reward <= final_reward:
                         self.hall_of_fame.append((tf.keras.models.clone_model(self.model), self.model.get_weights()))
@@ -272,7 +266,7 @@ class DQNAgent:
 
 if __name__ == "__main__":
     # env_name = "CartPole-v0"
-    env_name = "CartPole-v1"
+    # env_name = "CartPole-v1"
     # env_name = "Acrobot-v1"
     # env_name = "MountainCar-v0"
     # env_name = "MountainCarContinuous-v0"
@@ -283,15 +277,16 @@ if __name__ == "__main__":
     # env_name = "BipedalWalker-v3"
     # env_name = "BipedalWalkerHardcore-v3"
     # env_name = "Breakout-ram-v0"
+    env_name = "Pong-ram-v0"
     env = gym.make(env_name)
 
     # (self, environment, expl_decay=0.995, batch_size=64, mem_limit=1_000_000, mem_init_size=64,
     # max_episodes=100, gamma=0.95, learn_rate=0.001, learn_step=True, learn_batch=None, learn_epochs=5, done_factor=-1,
     # reward_policy='cumulative')
 
-    cartpole_dqn = DQNAgent(environment=env, expl_decay=0.995, batch_size=640, mem_limit=100_000, mem_init_size=2000,
-                            max_episodes=500, gamma=0.95, learning_rate=0.001, learn_step=True, learn_batch=1,
-                            learn_epochs=1, done_factor=1, reward_policy='asis')
+    cartpole_dqn = DQNAgent(environment=env, expl_decay=0.95, batch_size=501, mem_limit=1_000_000, mem_init_size=1000,
+                            max_episodes=100, gamma=0.99, learning_rate=0.01, learn_step=False, learn_batch=None,
+                            learn_epochs=30, done_factor=-1, done_penalty=-20, reward_policy='cumulative')
 
     cartpole_dqn.get_info()
     #cartpole_dqn.fill_memory()
