@@ -19,15 +19,8 @@ class PGAgent:
     def __init__(self, environment, max_episodes=100, gamma=0.95, learning_rate=0.001, learn_batch=None, learn_epochs=5,
                  done_factor=-1, done_penalty=-20, reward_policy='asis'):
         # Constants
-        # self.batch_size = batch_size
-        # self.memory_limit = mem_limit
-        # self.memory_init_size = mem_init_size
         self.max_episodes = max_episodes
-        # self.learn_step = learn_step
-        if learn_batch is None:
-            self.learn_batch = self.batch_size
-        else:
-            self.learn_batch = learn_batch
+        self.learn_batch = learn_batch
         self.learn_epochs = learn_epochs
         self.done_factor = done_factor
         self.done_penalty = done_penalty
@@ -35,11 +28,6 @@ class PGAgent:
 
         # Learning parameters
         self.alpha = learning_rate
-        self.expl_max = 1.0
-        self.expl_min = 0.01
-        self.expl_rate = self.expl_max
-        # self.expl_decay = expl_decay
-        self.greedy_decay = 0.0001
         self.gamma = gamma
 
         # Environment
@@ -143,16 +131,19 @@ class PGAgent:
                     # Create train batch
                     x_train = np.vstack(self.observations)
                     y_train = one_hot_actions
-                    # y_train = np.vstack(self.actions)
 
                     # Learn the estimator
-                    self.model.fit([x_train, discounted_rewards], y_train, batch_size=self.learn_batch,
-                                   epochs=self.learn_epochs, verbose=0)
-                    #self.model.train_on_batch([x_train, discounted_rewards], y_train)
+                    if self.learn_epochs > 1 or self.learn_batch is not None:
+                        batch_size = len(x_train) if self.learn_batch is None else self.learn_batch
+                        self.model.fit([x_train, discounted_rewards], y_train, batch_size=batch_size,
+                                       epochs=self.learn_epochs, verbose=0)
+                    else:
+                        self.model.train_on_batch([x_train, discounted_rewards], y_train)
+
                     self.observations, self.actions, self.rewards = [], [], []
 
-                    print(f"{self.expl_rate} Episode {episode} finished. "
-                          f"Reward {total_reward}. AvgRew {np.mean(self.total_rewards[-100:])}, Steps {steps}")
+                    print(f"Episode {episode} finished. "
+                          f"Reward: {total_reward}. Average 100 reward: {np.mean(self.total_rewards[-100:])}, Steps: {steps}")
 
                     # Copy the most successful model to the hall of fame
                     if self.hall_max_reward <= final_reward:
@@ -203,8 +194,8 @@ if __name__ == "__main__":
     # env_name = "Pong-ram-v0"
     env = gym.make(env_name)
 
-    cartpole_pg = PGAgent(environment=env, max_episodes=1500, gamma=0.99, learning_rate=0.0005, learn_batch=1000,
-                            learn_epochs=2, done_factor=1, done_penalty=0, reward_policy='asis')
+    cartpole_pg = PGAgent(environment=env, max_episodes=3000, gamma=0.99, learning_rate=0.0005, learn_batch=None,
+                            learn_epochs=1, done_factor=1, done_penalty=0, reward_policy='asis')
 
     cartpole_pg.get_info()
     cartpole_pg.fit(e_play=0)
