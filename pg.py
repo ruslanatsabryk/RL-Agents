@@ -1,11 +1,8 @@
 from collections import deque
 import gym
-from gym import spaces
-import tensorflow as tf
+import keras
+import keras.backend as K
 import numpy as np
-import random
-import pickle
-import copy
 
 class PGAgent:
     def get_info(self):
@@ -19,15 +16,14 @@ class PGAgent:
         # for envi in envs:
         #     print(envi)
 
-    def __init__(self, environment, expl_decay=0.995, batch_size=64, mem_limit=1_000_000, mem_init_size=64,
-                 max_episodes=100, gamma=0.95, learning_rate=0.001, learn_step=True, learn_batch=None, learn_epochs=5,
+    def __init__(self, environment, max_episodes=100, gamma=0.95, learning_rate=0.001, learn_batch=None, learn_epochs=5,
                  done_factor=-1, done_penalty=-20, reward_policy='asis'):
         # Constants
-        self.batch_size = batch_size
-        self.memory_limit = mem_limit
-        self.memory_init_size = mem_init_size
+        # self.batch_size = batch_size
+        # self.memory_limit = mem_limit
+        # self.memory_init_size = mem_init_size
         self.max_episodes = max_episodes
-        self.learn_step = learn_step
+        # self.learn_step = learn_step
         if learn_batch is None:
             self.learn_batch = self.batch_size
         else:
@@ -42,7 +38,7 @@ class PGAgent:
         self.expl_max = 1.0
         self.expl_min = 0.01
         self.expl_rate = self.expl_max
-        self.expl_decay = expl_decay
+        # self.expl_decay = expl_decay
         self.greedy_decay = 0.0001
         self.gamma = gamma
 
@@ -55,26 +51,38 @@ class PGAgent:
         # Memory
         self.observations = []
         self.actions = []
-        self.prob_dist = []
         self.rewards = []
+        self.total_rewards =[]
 
         # High-score Model's copies
         self.hall_of_fame = deque(maxlen=10)
         self.hall_max_reward = -99_999_999_999.0
 
-        # Model
+        # Model's input and output shape
         self.input_shape = self.observation_space.shape
         self.output_dim =  self.action_n
+        self.model, self.predictor = self.get_model()
         print(f"self.input_shape={self.input_shape}, self.output_dim={self.output_dim}")
-        m_input = tf.keras.Input(shape=self.input_shape)
-        m = tf.keras.layers.Dense(64, activation='selu')(m_input)
-        m = tf.keras.layers.Dense(64, activation='tanh')(m)
-        m = tf.keras.layers.Dense(24, activation='sigmoid')(m)
-        m_output = tf.keras.layers.Dense(self.output_dim , activation='softmax')(m)
-        model = tf.keras.Model(m_input, m_output)
-        #model.compile(optimizer='rmsprop', loss='mse')
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.alpha), loss='binary_crossentropy')
-        self.model = model
+
+    def get_model(self):
+        g_input = keras.Input(shape=[1])
+
+        def cepg_loss(y_true, y_pred):
+            y_pred_clip = K.clip(y_pred, 1e-9, 1-1e-9)
+            ce = y_true * K.log(y_pred_clip)
+            loss = K.sum(-ce * g_input)
+            return loss
+
+        m_input = keras.Input(shape=self.input_shape)
+        m = keras.layers.Dense(64, activation='relu')(m_input)
+        m = keras.layers.Dense(64, activation='relu')(m)
+        # m = tf.keras.layers.Dense(24, activation='sigmoid')(m)
+        m_output = keras.layers.Dense(self.output_dim, activation='softmax')(m)
+
+        estimator = keras.Model([m_input, g_input], m_output)
+        estimator.compile(optimizer=keras.optimizers.Adam(learning_rate=self.alpha), loss=cepg_loss)
+        predictor = keras.Model(m_input, m_output)
+        return estimator, predictor
 
     def fit(self, e_play=0):
         for episode in range(self.max_episodes):
@@ -88,11 +96,8 @@ class PGAgent:
                     self.env.render()
 
                 # Get Action for Descrete action space
-                probability_distribution = self.model.predict(observation)[0]
-                probability_distribution = np.exp(probability_distribution) / np.sum(np.exp(probability_distribution))
-                #print("probability_distribution", probability_distribution)
+                probability_distribution = self.predictor.predict(observation)[0]
                 action = np.random.choice(self.action_n, p=probability_distribution)
-                self.prob_dist.append(probability_distribution)
 
                 # Make a step with environment
                 observation_next, reward, done, info = self.env.step(action)
@@ -109,41 +114,49 @@ class PGAgent:
                 else:
                     final_reward = reward
 
-                # Add experience to memory
-                one_hot_action = np.zeros(self.action_n)
-                one_hot_action[action] = 1
-                self.actions.append(one_hot_action - probability_distribution)
+                # Fill the memory
+                self.actions.append(action)
                 self.observations.append(observation)
                 self.rewards.append(final_reward)
 
                 observation = observation_next
 
                 if done:
+                    actions_len = len(self.actions)
+                    one_hot_actions = np.zeros((actions_len, self.action_n))
+                    one_hot_actions[range(actions_len), self.actions] = 1
+
+                    self.total_rewards.append(total_reward)
+
                     # Calculate discounted reward
                     discounted_rewards = np.zeros_like(self.rewards)
                     accumulation = 0
                     for i in reversed(range(len(self.rewards))):
                         accumulation = accumulation * self.gamma + self.rewards[i]
                         discounted_rewards[i] = accumulation
+
                     mean = np.mean(discounted_rewards)
-                    std = np.std(discounted_rewards)
+                    std_ = np.std(discounted_rewards)
+                    std = std_ if std_ !=0 else 1
                     discounted_rewards = (discounted_rewards - mean) / std
 
                     # Create train batch
                     x_train = np.vstack(self.observations)
-                    actions = np.vstack(self.actions)
-                    prob_dist = np.vstack(self.prob_dist)
-                    y_train = prob_dist + actions * np.reshape(discounted_rewards, (-1, 1))
+                    y_train = one_hot_actions
+                    # y_train = np.vstack(self.actions)
 
                     # Learn the estimator
-                    self.model.fit(x_train, y_train, batch_size=self.learn_batch, epochs=self.learn_epochs, verbose=0)
-                    #self.model.train_on_batch(x_train, y_train)
-                    self.observations, self.actions, self.rewards, self.prob_dist = [], [], [], []
+                    self.model.fit([x_train, discounted_rewards], y_train, batch_size=self.learn_batch,
+                                   epochs=self.learn_epochs, verbose=0)
+                    #self.model.train_on_batch([x_train, discounted_rewards], y_train)
+                    self.observations, self.actions, self.rewards = [], [], []
 
-                    print(f"{self.expl_rate} Episode {episode} finished. Reward {total_reward}. Steps {steps}")
-                    # Copy the most successful model to hall of fame
+                    print(f"{self.expl_rate} Episode {episode} finished. "
+                          f"Reward {total_reward}. AvgRew {np.mean(self.total_rewards[-100:])}, Steps {steps}")
+
+                    # Copy the most successful model to the hall of fame
                     if self.hall_max_reward <= final_reward:
-                        self.hall_of_fame.append((tf.keras.models.clone_model(self.model), self.model.get_weights()))
+                        self.hall_of_fame.append((keras.models.clone_model(self.predictor), self.predictor.get_weights()))
                         self.hall_max_reward = final_reward
                     break
 
@@ -159,7 +172,9 @@ class PGAgent:
             done = False
             while not done:
                 play_env.render()
-                action = np.argmax(play_model.predict(observation)[0])
+                #action = np.argmax(play_model.predict(observation)[0])
+                probability_distribution = play_model.predict(observation)[0]
+                action = np.random.choice(range(self.action_n), p=probability_distribution)
 
                 # Make a step with environment
                 observation_next, reward, done, info = play_env.step(action)
@@ -174,12 +189,12 @@ class PGAgent:
 
 if __name__ == "__main__":
     # env_name = "CartPole-v0"
-    env_name = "CartPole-v1"
+    # env_name = "CartPole-v1"
     # env_name = "Acrobot-v1"
     # env_name = "MountainCar-v0"
     # env_name = "MountainCarContinuous-v0"
     # env_name = "Pendulum-v0"
-    # env_name = "LunarLander-v2"
+    env_name = "LunarLander-v2"
     # env_name = "LunarLanderContinuous-v2"
     # env_name = "CarRacing-v0"
     # env_name = "BipedalWalker-v3"
@@ -188,14 +203,13 @@ if __name__ == "__main__":
     # env_name = "Pong-ram-v0"
     env = gym.make(env_name)
 
-    cartpole_dqn = PGAgent(environment=env, expl_decay=0.95, batch_size=500, mem_limit=1_000_000, mem_init_size=1000,
-                            max_episodes=1000, gamma=0.9, learning_rate=0.01, learn_step=False, learn_batch=200,
-                            learn_epochs=2, done_factor=-1, done_penalty=0, reward_policy='asis')
+    cartpole_pg = PGAgent(environment=env, max_episodes=1500, gamma=0.99, learning_rate=0.0005, learn_batch=1000,
+                            learn_epochs=2, done_factor=1, done_penalty=0, reward_policy='asis')
 
-    cartpole_dqn.get_info()
-    cartpole_dqn.fit(e_play=1)
+    cartpole_pg.get_info()
+    cartpole_pg.fit(e_play=0)
 
     env_play = gym.make(env_name)
-    model, weights = cartpole_dqn.hall_of_fame[-1]
+    model, weights = cartpole_pg.hall_of_fame[-1]
     model.set_weights(weights)
-    cartpole_dqn.play(env_play, model, n_episodes=200)
+    cartpole_pg.play(env_play, model, n_episodes=200)
