@@ -17,13 +17,14 @@ class PGAgent:
         #     print(envi)
 
     def __init__(self, environment, max_episodes=100, gamma=0.95, learning_rate=0.001, learn_batch=None, learn_epochs=5,
-                 done_factor=-1, done_reward=-20, reward_policy='asis'):
+                 done_factor=-1, done_reward=-20, done_steps_factor=0, reward_policy='asis', hof_size=10):
         # Constants
         self.max_episodes = max_episodes
         self.learn_batch = learn_batch
         self.learn_epochs = learn_epochs
         self.done_factor = done_factor
         self.done_reward = done_reward
+        self.done_steps_factor = done_steps_factor
         self.reward_policy = reward_policy
 
         # Learning parameters
@@ -43,7 +44,9 @@ class PGAgent:
         self.total_rewards =[]
 
         # High-score Model's copies
-        self.hall_of_fame = deque(maxlen=10)
+        self.hof_size = hof_size
+        self.hall_of_fame = deque(maxlen=self.hof_size)
+        self.hall_of_rewards = deque(maxlen=self.hof_size)
         self.hall_max_reward = -99_999_999_999.0
 
         # Model's input and output shape
@@ -56,7 +59,6 @@ class PGAgent:
         g_input = keras.Input(shape=[1])
 
         def cepg_loss_fn(y_true, y_pred):
-            #y_pred_clip = tf.clip_by_value(y_pred, 1e-9, 1-1e-9)
             ce = y_true * tf.math.log(y_pred)
             loss = -tf.math.reduce_sum(ce * g_input, axis=None, keepdims=False)
             return loss
@@ -96,7 +98,7 @@ class PGAgent:
                 total_reward += reward
                 total_reward_ = total_reward
                 if done:
-                    reward_ = reward * self.done_factor + self.done_reward - steps
+                    reward_ = reward * self.done_factor + self.done_reward + self.done_steps_factor * steps
                     total_reward_ += reward_
 
                 # Calculating final reward
@@ -147,12 +149,27 @@ class PGAgent:
                     self.observations, self.actions, self.rewards = [], [], []
 
                     print(f"Episode {episode} finished. "
-                          f"Reward: {total_reward}. Average 100 reward: {np.mean(self.total_rewards[-100:])}, Steps: {steps}")
+                          f"Reward: {total_reward}. Average_100 reward: {np.mean(self.total_rewards[-100:])}, Steps: {steps}")
 
                     # Copy the most successful model to the hall of fame
-                    if self.hall_max_reward <= final_reward:
+                    if total_reward >= self.hall_max_reward:
                         self.hall_of_fame.append((keras.models.clone_model(self.predictor), self.predictor.get_weights()))
-                        self.hall_max_reward = final_reward
+                        self.hall_of_rewards.append(total_reward)
+                        self.hall_max_reward = total_reward
+                    elif total_reward >= min(self.hall_of_rewards): # Insertion of the winner without replacement
+                        np_hor = np.array(self.hall_of_rewards)
+                        hof_len = len(self.hall_of_rewards)
+                        indexes = np.arange(hof_len)
+                        insert_index = np.amax(indexes[np_hor <= total_reward])
+                        if hof_len == self.hof_size:
+                            _ = self.hall_of_rewards.popleft()
+                            _ = self.hall_of_fame.popleft()
+                        else:
+                            insert_index += 1
+
+                        self.hall_of_rewards.insert(insert_index, total_reward)
+                        self.hall_of_fame.insert(insert_index, (keras.models.clone_model(self.predictor),
+                                                                self.predictor.get_weights()))
                     break
 
         self.env.close()
@@ -199,8 +216,8 @@ if __name__ == "__main__":
     # env_name = "Pong-ram-v0"
     env = gym.make(env_name)
 
-    cartpole_pg = PGAgent(environment=env, max_episodes=2000, gamma=0.99, learning_rate=0.0005, learn_batch=None,
-                            learn_epochs=2, done_factor=1, done_reward=100, reward_policy='asis')
+    cartpole_pg = PGAgent(environment=env, max_episodes=3000, gamma=0.99, learning_rate=0.0005, learn_batch=None,
+                            learn_epochs=1, done_factor=1, done_reward=0, done_steps_factor=0, reward_policy='asis')
 
     cartpole_pg.get_info()
     cartpole_pg.fit(e_play=0)
