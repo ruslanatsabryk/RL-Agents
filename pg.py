@@ -1,7 +1,7 @@
 from collections import deque
 import gym
-import keras
-import keras.backend as K
+import tensorflow as tf
+from tensorflow import keras
 import numpy as np
 
 class PGAgent:
@@ -17,13 +17,13 @@ class PGAgent:
         #     print(envi)
 
     def __init__(self, environment, max_episodes=100, gamma=0.95, learning_rate=0.001, learn_batch=None, learn_epochs=5,
-                 done_factor=-1, done_penalty=-20, reward_policy='asis'):
+                 done_factor=-1, done_reward=-20, reward_policy='asis'):
         # Constants
         self.max_episodes = max_episodes
         self.learn_batch = learn_batch
         self.learn_epochs = learn_epochs
         self.done_factor = done_factor
-        self.done_penalty = done_penalty
+        self.done_reward = done_reward
         self.reward_policy = reward_policy
 
         # Learning parameters
@@ -55,27 +55,26 @@ class PGAgent:
     def get_model(self):
         g_input = keras.Input(shape=[1])
 
-        def cepg_loss(y_true, y_pred):
-            y_pred_clip = K.clip(y_pred, 1e-9, 1-1e-9)
-            ce = y_true * K.log(y_pred_clip)
-            loss = K.sum(-ce * g_input)
+        def cepg_loss_fn(y_true, y_pred):
+            #y_pred_clip = tf.clip_by_value(y_pred, 1e-9, 1-1e-9)
+            ce = y_true * tf.math.log(y_pred)
+            loss = -tf.math.reduce_sum(ce * g_input, axis=None, keepdims=False)
             return loss
 
         m_input = keras.Input(shape=self.input_shape)
         m = keras.layers.Dense(64, activation='relu')(m_input)
         m = keras.layers.Dense(64, activation='relu')(m)
-        # m = tf.keras.layers.Dense(24, activation='sigmoid')(m)
         m_output = keras.layers.Dense(self.output_dim, activation='softmax')(m)
 
         estimator = keras.Model([m_input, g_input], m_output)
-        estimator.compile(optimizer=keras.optimizers.Adam(learning_rate=self.alpha), loss=cepg_loss)
+        estimator.compile(optimizer=keras.optimizers.Adam(learning_rate=self.alpha), loss=cepg_loss_fn)#,
         predictor = keras.Model(m_input, m_output)
         return estimator, predictor
 
     def fit(self, e_play=0):
+
         for episode in range(self.max_episodes):
             observation = self.env.reset()
-            observation = np.reshape(observation, (1, -1))
             steps = 0
             total_reward = 0
             done = False
@@ -84,23 +83,27 @@ class PGAgent:
                     self.env.render()
 
                 # Get Action for Descrete action space
-                probability_distribution = self.predictor.predict(observation)[0]
+                observation_ = observation[np.newaxis, :]
+                probability_distribution = self.predictor.predict(observation_)[0]
                 action = np.random.choice(self.action_n, p=probability_distribution)
 
                 # Make a step with environment
                 observation_next, reward, done, info = self.env.step(action)
                 steps += 1
-                observation_next = np.reshape(observation_next, (1, -1))
 
                 # Done and total rewards
-                if done: reward = reward * self.done_factor + self.done_penalty
+                reward_ = reward
                 total_reward += reward
+                total_reward_ = total_reward
+                if done:
+                    reward_ = reward * self.done_factor + self.done_reward - steps
+                    total_reward_ += reward_
 
                 # Calculating final reward
                 if self.reward_policy=='cumulative':
-                    final_reward = total_reward
+                    final_reward = total_reward_
                 else:
-                    final_reward = reward
+                    final_reward = reward_
 
                 # Fill the memory
                 self.actions.append(action)
@@ -114,6 +117,7 @@ class PGAgent:
                     one_hot_actions = np.zeros((actions_len, self.action_n))
                     one_hot_actions[range(actions_len), self.actions] = 1
 
+                    # Statistics of total rewards
                     self.total_rewards.append(total_reward)
 
                     # Calculate discounted reward
@@ -129,7 +133,7 @@ class PGAgent:
                     discounted_rewards = (discounted_rewards - mean) / std
 
                     # Create train batch
-                    x_train = np.vstack(self.observations)
+                    x_train = np.array(self.observations)
                     y_train = one_hot_actions
 
                     # Learn the estimator
@@ -157,19 +161,18 @@ class PGAgent:
     def play(self, play_env, play_model, n_episodes=1):
         for episode in range(n_episodes):
             observation = play_env.reset()
-            observation = np.reshape(observation, (1, -1))
             steps = 0
             total_reward = 0
             done = False
             while not done:
                 play_env.render()
                 #action = np.argmax(play_model.predict(observation)[0])
-                probability_distribution = play_model.predict(observation)[0]
+                observation_ = observation[np.newaxis, :]
+                probability_distribution = play_model.predict(observation_)[0]
                 action = np.random.choice(range(self.action_n), p=probability_distribution)
 
                 # Make a step with environment
                 observation_next, reward, done, info = play_env.step(action)
-                observation_next = np.reshape(observation_next, (1, -1))
                 observation = observation_next
 
                 steps += 1
@@ -179,6 +182,8 @@ class PGAgent:
                     break
 
 if __name__ == "__main__":
+    tf.compat.v1.disable_eager_execution()
+
     # env_name = "CartPole-v0"
     # env_name = "CartPole-v1"
     # env_name = "Acrobot-v1"
@@ -194,8 +199,8 @@ if __name__ == "__main__":
     # env_name = "Pong-ram-v0"
     env = gym.make(env_name)
 
-    cartpole_pg = PGAgent(environment=env, max_episodes=3000, gamma=0.99, learning_rate=0.0005, learn_batch=None,
-                            learn_epochs=1, done_factor=1, done_penalty=0, reward_policy='asis')
+    cartpole_pg = PGAgent(environment=env, max_episodes=2000, gamma=0.99, learning_rate=0.0005, learn_batch=None,
+                            learn_epochs=2, done_factor=1, done_reward=100, reward_policy='asis')
 
     cartpole_pg.get_info()
     cartpole_pg.fit(e_play=0)
